@@ -113,33 +113,45 @@ module Serve = struct
   ;;
 end
 
-type t =
-  { serve : Serve.t
-  ; output : [ `Fuchsia of string | `Sexp of string ]
+type events_output_format =
+  | Sexp
+  | Binio
+
+type events_writer =
+  { format : events_output_format
+  ; writer : Writer.t
+  ; output_callstack : bool
   }
 
-let store_path = function
-  | `Fuchsia store_path | `Sexp store_path -> store_path
-;;
+type t =
+  { serve : Serve.t
+  ; fxt_path : string
+  ; events_path : string option
+  ; output_callstack : bool
+  }
 
 let param =
-  let%map_open.Command store_path =
+  let%map_open.Command fxt_path =
     let default = "trace.fxt" in
     flag
       "output"
       (optional_with_default default string)
       ~aliases:[ "o" ]
-      ~doc:[%string "FILE Where to output the trace. (default: '%{default}')"]
+      ~doc:
+        [%string
+          "FILE Fuchsia file to output the fuchsia trace to. (default: '%{default}')"]
+  and events_path =
+    flag
+      "events-output"
+      (optional string)
+      ~doc:[%string "FILE Sexp or binio file to output the trace events to."]
+  and output_callstack =
+    flag
+      "callstacks"
+      no_arg
+      ~doc:[%string "If set, callstacks will be included in the events output file"]
   and serve = Serve.param in
-  let output =
-    match String.is_suffix ~suffix:".sexp" store_path with
-    | true -> `Sexp store_path
-    | false -> `Fuchsia store_path
-  in
-  (match serve, output with
-   | Enabled _, `Sexp _ -> raise_s [%message "cannot serve .sexp output"]
-   | _ -> ());
-  { serve; output }
+  { serve; fxt_path; events_path; output_callstack }
 ;;
 
 let notify_trace ~store_path =
@@ -153,34 +165,48 @@ let maybe_stash_old_trace ~filename =
   | Core_unix.Unix_error (ENOENT, (_ : string), (_ : string)) -> ()
 ;;
 
-let write_and_maybe_serve ?num_temp_strs t ~filename ~f_sexp ~f_fuchsia =
+let write_and_maybe_serve
+  ?num_temp_strs
+  t
+  ~filename
+  ~(f : ?events_writer:events_writer -> Tracing_zero.Writer.t -> 'a Deferred.Or_error.t)
+  =
   let open Deferred.Or_error.Let_syntax in
   maybe_stash_old_trace ~filename;
-  match t.output with
-  | `Sexp store_path -> Writer.with_file_atomic store_path ~f:f_sexp
-  | `Fuchsia store_path ->
-    let fd = Core_unix.openfile store_path ~mode:[ O_RDWR; O_CREAT; O_CLOEXEC ] in
-    (* Write to and serve from an indirect reference to [store_path], through our process'
-     fd table. This is a little grotesque, but avoids a race where the user runs
-     magic-trace twice with the same [-output], such that the filename changes under
-     [-serve] -- without this hack, the earlier magic-trace serving instance would start
-     serving the new trace, which is unlikely to be what the user expected. *)
-    let indirect_store_path = [%string "/proc/self/fd/%{fd#Core_unix.File_descr}"] in
-    let w =
-      Tracing_zero.Writer.create_for_file ?num_temp_strs ~filename:indirect_store_path ()
-    in
-    let%bind res = f_fuchsia w in
-    let%map () =
-      match t.serve with
-      | Disabled -> notify_trace ~store_path
-      | Enabled serve ->
-        Serve.serve_trace_file serve ~filename ~store_path:indirect_store_path
-    in
-    Core_unix.close fd;
-    res
+  let { serve; fxt_path; events_path; output_callstack } = t in
+  let fd = Core_unix.openfile fxt_path ~mode:[ O_RDWR; O_CREAT; O_CLOEXEC ] in
+  (* Write to and serve from an indirect reference to [fxt_path], through our process'
+    fd table. This is a little grotesque, but avoids a race where the user runs
+    magic-trace twice with the same [-output], such that the filename changes under
+    [-serve] -- without this hack, the earlier magic-trace serving instance would start
+    serving the new trace, which is unlikely to be what the user expected. *)
+  let indirect_store_path = [%string "/proc/self/fd/%{fd#Core_unix.File_descr}"] in
+  let w =
+    Tracing_zero.Writer.create_for_file ?num_temp_strs ~filename:indirect_store_path ()
+  in
+  let%bind.Deferred.Or_error res =
+    match events_path with
+    | None -> f w
+    | Some path ->
+      let format =
+        match String.is_suffix ~suffix:".sexp" path with
+        | true -> Sexp
+        | false -> Binio
+      in
+      Writer.with_file path ~f:(fun writer ->
+        f ~events_writer:{ format; writer; output_callstack } w)
+  in
+  let%map () =
+    match serve with
+    | Disabled -> notify_trace ~store_path:fxt_path
+    | Enabled serve ->
+      Serve.serve_trace_file serve ~filename ~store_path:indirect_store_path
+  in
+  Core_unix.close fd;
+  res
 ;;
 
-let write_and_maybe_view ?num_temp_strs t ~f_sexp ~f_fuchsia =
-  let filename = Filename.basename (store_path t.output) in
-  write_and_maybe_serve ?num_temp_strs t ~filename ~f_sexp ~f_fuchsia
+let write_and_maybe_view ?num_temp_strs t ~f =
+  let filename = Filename.basename t.fxt_path in
+  write_and_maybe_serve ?num_temp_strs t ~filename ~f
 ;;

@@ -13,6 +13,7 @@ module For_testing : sig
 
   val write_trace_from_events
     :  ?ocaml_exception_info:Ocaml_exception_info.t
+    -> ?events_writer:Tracing_tool_output.events_writer
     -> trace_scope:Trace_scope.t
     -> debug_info:Elf.Addr_table.t option
     -> Tracing_zero.Writer.t
