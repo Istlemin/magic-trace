@@ -7,7 +7,7 @@ type t =
   | Untraced
   | Returned
   | Syscall
-[@@deriving sexp, compare, bin_io]
+[@@deriving sexp, compare, bin_io, hash]
 
 (* [Int64.Hex] (used by [Perf_map_location]) doesn't derive [equal], so we implement
    explicitly. *)

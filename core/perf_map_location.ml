@@ -6,4 +6,4 @@ type t =
   ; size : Int.Hex.t
   ; function_ : string
   }
-[@@deriving sexp, compare, bin_io]
+[@@deriving sexp, compare, bin_io, hash]

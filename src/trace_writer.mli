@@ -45,7 +45,7 @@ end
 module Event_and_callstack : sig
   type t =
     { event : Event.t
-    ; callstack : Callstack.t
+    ; callstack : Callstack_compression.compression_event option
     }
   [@@deriving sexp, bin_io]
 end

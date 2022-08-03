@@ -90,7 +90,7 @@ end
 module Event_and_callstack = struct
   type t =
     { event : Event.t
-    ; callstack : Callstack.t
+    ; callstack : Callstack_compression.compression_event option
     }
   [@@deriving sexp, bin_io]
 end
@@ -884,22 +884,29 @@ let maybe_stop_filtered_region t ~should_write =
 ;;
 
 let write_event_and_callstack events_writer event callstack =
+  let compression_event =
+    Callstack_compression.compress_callstack
+      ~state:Tracing_tool_output.(events_writer.callstack_compression_state)
+      (Callstack.(callstack.stack)
+      |> Stack.to_list
+      |> List.map ~f:(fun Event.Location.{ symbol; _ } -> symbol))
+  in
+  let event_and_callstack =
+    match Tracing_tool_output.(events_writer.output_callstack) with
+    | true -> Event_and_callstack.{ event; callstack = Some compression_event }
+    | false -> Event_and_callstack.{ event; callstack = None }
+  in
   match events_writer with
-  | Tracing_tool_output.{ format = Sexp; writer; output_callstack; _ } ->
+  | Tracing_tool_output.{ format = Sexp; writer; _ } ->
     Async.Writer.write_sexp
       ~terminate_with:Async.Writer.Terminate_with.Newline
       writer
-      (match output_callstack with
-       | true -> [%sexp ({ event; callstack } : Event_and_callstack.t)]
-       | false -> [%sexp (event : Event.t)])
-  | Tracing_tool_output.{ format = Binio; writer; output_callstack; _ } ->
-    (match output_callstack with
-     | true ->
-       Async.Writer.write_bin_prot
-         writer
-         Event_and_callstack.bin_writer_t
-         { event; callstack }
-     | false -> Async.Writer.write_bin_prot writer Event.bin_writer_t event)
+      [%sexp (event_and_callstack : Event_and_callstack.t)]
+  | Tracing_tool_output.{ format = Binio; writer; _ } ->
+    Async.Writer.write_bin_prot
+      writer
+      Event_and_callstack.bin_writer_t
+      event_and_callstack
 ;;
 
 (* Write perf_events into a file as a Fuschia trace (stack events). Events should be

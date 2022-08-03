@@ -121,6 +121,7 @@ type events_writer =
   { format : events_output_format
   ; writer : Writer.t
   ; output_callstack : bool
+  ; callstack_compression_state : Callstack_compression.t
   }
 
 type t =
@@ -194,7 +195,14 @@ let write_and_maybe_serve
         | false -> Binio
       in
       Writer.with_file path ~f:(fun writer ->
-        f ~events_writer:{ format; writer; output_callstack } w)
+        let events_writer =
+          { format
+          ; writer
+          ; output_callstack
+          ; callstack_compression_state = Callstack_compression.init ()
+          }
+        in
+        f ~events_writer w)
   in
   let%map () =
     match serve with

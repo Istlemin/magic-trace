@@ -11,6 +11,7 @@ type events_writer =
   { format : events_output_format
   ; writer : Writer.t
   ; output_callstack : bool
+  ; callstack_compression_state : Callstack_compression.t
   }
 
 (** Offers configuration parameters for where to save a file and whether to serve it *)
